@@ -752,11 +752,12 @@ int main(int argc, char *argv[])
 	while (running && ret != -1)
 		ret = wl_display_dispatch(display->wl_display);
 
+	gst_element_set_state(pipeline, GST_STATE_NULL);
+	gst_object_unref(pipeline);
+
 	destroy_window(window);
 	destroy_display(display);
 	free(gargv);
 
-	gst_element_set_state(pipeline, GST_STATE_NULL);
-	gst_object_unref(pipeline);
 	return ret;
 }
