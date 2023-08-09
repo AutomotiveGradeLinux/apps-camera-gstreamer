@@ -652,6 +652,12 @@ int main(int argc, char *argv[])
 	struct receiver_data receiver_data = {};
 	struct display *display;
 	struct window *window;
+	const char *camera_device = NULL;
+	const char *width_str = NULL;
+	const char *height_str = NULL;
+	int width;
+	int height;
+
 	char pipeline_str[1024];
 	GError *error = NULL;
 	const char *app_id = "camera-gstreamer";
@@ -667,9 +673,24 @@ int main(int argc, char *argv[])
 	gargv[0] = strdup(argv[0]);
 	gargv[1] = strdup("--gst-debug-level=2");
 
+	camera_device = getenv("DEFAULT_V4L2_DEVICE");
+	if (!camera_device)
+		camera_device = get_first_camera_device();
+	width_str = getenv("DEFAULT_V4L2_DEVICE_WIDTH");
+	if (!width_str)
+		width = WINDOW_WIDTH_SIZE;
+	else
+		width = atoi(width_str);
+
+	height_str = getenv("DEFAULT_V4L2_DEVICE_HEIGHT");
+	if (!height_str)
+		height = WINDOW_HEIGHT_SIZE;
+	else
+		height = atoi(height_str);
+
 	memset(pipeline_str, 0, sizeof(pipeline_str));
 	snprintf(pipeline_str, sizeof(pipeline_str), "v4l2src device=%s ! video/x-raw,width=%d,height=%d ! waylandsink", 
-		get_first_camera_device(), WINDOW_WIDTH_SIZE, WINDOW_HEIGHT_SIZE);
+		camera_device, width, height);
 	gst_init(&gargc, &gargv);
 
 	setbuf(stdout, NULL);
