@@ -147,7 +147,7 @@ prune_old_released_buffers(struct window *window)
 
 	wl_list_for_each_safe(b, b_next,
 			      &window->buffer_list, buffer_link) {
-		if (!b->busy && (b->width != window->width || 
+		if (!b->busy && (b->width != window->width ||
 				 b->height != window->height))
 			destroy_buffer(b);
 	}
@@ -529,7 +529,7 @@ handle_xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 
 	// use our own macro as C++ can't typecast from (void *) directly
 	WL_ARRAY_FOR_EACH(p, states, uint32_t *) {
-		uint32_t state = *p; 
+		uint32_t state = *p;
 		switch (state) {
 		case XDG_TOPLEVEL_STATE_FULLSCREEN:
 			window->fullscreen = 1;
@@ -713,6 +713,10 @@ int main(int argc, char *argv[])
 	int width;
 	int height;
 
+	// pipewire is default.
+	char *v4l2_path = getenv("ENABLE_V4L2_PATH");
+	bool v4l2 = false;
+
 	char pipeline_str[1024];
 	GError *error = NULL;
 	const char *app_id = "camera-gstreamer";
@@ -731,21 +735,33 @@ int main(int argc, char *argv[])
 	camera_device = getenv("DEFAULT_V4L2_DEVICE");
 	if (!camera_device)
 		camera_device = get_first_camera_device();
-	width_str = getenv("DEFAULT_V4L2_DEVICE_WIDTH");
+
+	width_str = getenv("DEFAULT_DEVICE_WIDTH");
 	if (!width_str)
 		width = WINDOW_WIDTH_SIZE;
 	else
 		width = atoi(width_str);
 
-	height_str = getenv("DEFAULT_V4L2_DEVICE_HEIGHT");
+	height_str = getenv("DEFAULT_DEVICE_HEIGHT");
 	if (!height_str)
 		height = WINDOW_HEIGHT_SIZE;
 	else
 		height = atoi(height_str);
 
+	if (v4l2_path == NULL)
+		v4l2 = false;
+	else if (g_str_equal(v4l2_path, "yes") || g_str_equal(v4l2_path, "true"))
+		v4l2 = true;
+
 	memset(pipeline_str, 0, sizeof(pipeline_str));
-	snprintf(pipeline_str, sizeof(pipeline_str), "v4l2src device=%s ! video/x-raw,width=%d,height=%d ! waylandsink", 
-		camera_device, width, height);
+
+	if (v4l2)
+		snprintf(pipeline_str, sizeof(pipeline_str), "v4l2src device=%s ! video/x-raw,width=%d,height=%d ! waylandsink",
+			camera_device, width, height);
+	else
+		snprintf(pipeline_str, sizeof(pipeline_str), "pipewiresrc ! video/x-raw,width=%d,height=%d ! waylandsink",
+      width, height);
+
 	gst_init(&gargc, &gargv);
 
 	setbuf(stdout, NULL);
@@ -766,7 +782,7 @@ int main(int argc, char *argv[])
 		return -1;
 
 	// if you'd want to place the video in a pop-up/dialog type of window:
-	// agl_shell_desktop_set_app_property(display->agl_shell_desktop, app_id, 
+	// agl_shell_desktop_set_app_property(display->agl_shell_desktop, app_id,
 	//				   AGL_SHELL_DESKTOP_APP_ROLE_POPUP,
 	//				   WINDOW_WIDTH_POS_X, WINDOW_WIDTH_POS_Y,
 	//				   0, 0, WINDOW_WIDTH_SIZE, WINDOW_HEIGHT_SIZE,
@@ -775,7 +791,7 @@ int main(int argc, char *argv[])
 	// we use the role to set a correspondence between the top level
 	// surface and our application, with the previous call letting the
 	// compositor know that we're one and the same
-	window = create_window(display, WINDOW_WIDTH_SIZE, WINDOW_HEIGHT_SIZE, app_id); 
+	window = create_window(display, WINDOW_WIDTH_SIZE, WINDOW_HEIGHT_SIZE, app_id);
 
 	if (!window) {
 		free(gargv);
