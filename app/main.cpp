@@ -31,6 +31,8 @@
 #define WINDOW_WIDTH_POS_X	640
 #define WINDOW_WIDTH_POS_Y	180
 
+#define MAX_BUFFER_ALLOC	2
+
 // C++ requires a cast and we in wayland we do the cast implictly
 #define WL_ARRAY_FOR_EACH(pos, array, type) \
 	for (pos = (type)(array)->data; \
@@ -59,6 +61,9 @@ struct buffer {
 	struct wl_buffer *buffer;
 	void *shm_data;
 	int busy;
+	int width, height;
+	size_t size;    /* width * 4 * height */
+	struct wl_list buffer_link; /** window::buffer_list */
 };
 
 struct window {
@@ -66,6 +71,8 @@ struct window {
 
 	int x, y;
 	int width, height;
+	int init_width;
+	int init_height;
 
 	struct wl_surface *surface;
 
@@ -75,8 +82,9 @@ struct window {
 
 	int fullscreen, maximized;
 
-	struct buffer buffers[2];
+	struct wl_list buffer_list;
 	struct wl_callback *callback;
+	bool needs_update_buffer;
 };
 
 
@@ -92,6 +100,58 @@ static int running = 1;
 
 static void
 redraw(void *data, struct wl_callback *callback, uint32_t time);
+
+static struct buffer *
+alloc_buffer(struct window *window, int width, int height)
+{
+	struct buffer *buffer = static_cast<struct buffer *>(calloc(1, sizeof(*buffer)));
+
+	buffer->width = width;
+	buffer->height = height;
+	wl_list_insert(&window->buffer_list, &buffer->buffer_link);
+
+	return buffer;
+}
+
+static void
+destroy_buffer(struct buffer *buffer)
+{
+	if (buffer->buffer)
+		wl_buffer_destroy(buffer->buffer);
+
+	munmap(buffer->shm_data, buffer->size);
+	wl_list_remove(&buffer->buffer_link);
+	free(buffer);
+}
+
+static struct buffer *
+pick_free_buffer(struct window *window)
+{
+	struct buffer *b;
+	struct buffer *buffer = NULL;
+
+	wl_list_for_each(b, &window->buffer_list, buffer_link) {
+		if (!b->busy) {
+			buffer = b;
+			break;
+		}
+	}
+
+	return buffer;
+}
+
+static void
+prune_old_released_buffers(struct window *window)
+{
+	struct buffer *b, *b_next;
+
+	wl_list_for_each_safe(b, b_next,
+			      &window->buffer_list, buffer_link) {
+		if (!b->busy && (b->width != window->width || 
+				 b->height != window->height))
+			destroy_buffer(b);
+	}
+}
 
 static void
 paint_pixels(void *image, int padding, int width, int height, uint32_t time)
@@ -144,6 +204,10 @@ create_shm_buffer(struct display *display, struct buffer *buffer,
 	close(fd);
 
 	buffer->shm_data = data;
+	buffer->size = size;
+	buffer->width = width;
+	buffer->height = height;
+
 	fprintf(stdout, "Created shm buffer with width %d, height %d\n", width, height);
 	return 0;
 }
@@ -154,26 +218,19 @@ get_next_buffer(struct window *window)
 	struct buffer *buffer = NULL;
 	int ret = 0;
 
-	/* we need to create new buffers for the resized value so discard
-	 * the 'old' one and force creation of the buffer with the newer
-	 * dimensions */
-	if (window->wait_for_configure && window->maximized) {
-		/* The 'old' buffer might not exist if maximized is received
-		 * from the start. */
-		if (window->buffers[0].buffer && !window->buffers[0].busy) {
-			wl_buffer_destroy(window->buffers[0].buffer);
-			window->buffers[0].buffer = NULL;
-			window->wait_for_configure = false;
-		}
+	if (window->needs_update_buffer) {
+		int i;
+
+		for (i = 0; i < MAX_BUFFER_ALLOC; i++)
+			alloc_buffer(window, window->width, window->height);
+
+		window->needs_update_buffer = false;
 	}
 
-	if (!window->buffers[0].busy) {
-		buffer = &window->buffers[0];
-	} else if (!window->buffers[1].busy) {
-		buffer = &window->buffers[1];
-	} else {
+	buffer = pick_free_buffer(window);
+	if (!buffer)
 		return NULL;
-	}
+
 
 	if (!buffer->buffer) {
 		ret = create_shm_buffer(window->display, buffer, window->width,
@@ -197,31 +254,33 @@ static const struct wl_callback_listener frame_listener = {
 static void
 redraw(void *data, struct wl_callback *callback, uint32_t time)
 {
-        struct window *window = static_cast<struct window *>(data);
-        struct buffer *buffer;
+	struct window *window = static_cast<struct window *>(data);
+	struct buffer *buffer;
 
-        buffer = get_next_buffer(window);
-        if (!buffer) {
-                fprintf(stderr,
-                        !callback ? "Failed to create the first buffer.\n" :
-                        "Both buffers busy at redraw(). Server bug?\n");
-                abort();
-        }
+	prune_old_released_buffers(window);
+
+	buffer = get_next_buffer(window);
+	if (!buffer) {
+		fprintf(stderr,
+				!callback ? "Failed to create the first buffer.\n" :
+				"Both buffers busy at redraw(). Server bug?\n");
+		abort();
+	}
 
 	// do the actual painting
 	paint_pixels(buffer->shm_data, 0x0, window->width, window->height, time);
 
-        wl_surface_attach(window->surface, buffer->buffer, 0, 0);
-        wl_surface_damage(window->surface, 0, 0, window->width, window->height);
+	wl_surface_attach(window->surface, buffer->buffer, 0, 0);
+	wl_surface_damage(window->surface, 0, 0, window->width, window->height);
 
-        if (callback)
-                wl_callback_destroy(callback);
+	if (callback)
+		wl_callback_destroy(callback);
 
-        window->callback = wl_surface_frame(window->surface);
-        wl_callback_add_listener(window->callback, &frame_listener, window);
-        wl_surface_commit(window->surface);
+	window->callback = wl_surface_frame(window->surface);
+	wl_callback_add_listener(window->callback, &frame_listener, window);
+	wl_surface_commit(window->surface);
 
-        buffer->busy = 1;
+	buffer->busy = 1;
 }
 
 static void
@@ -449,6 +508,7 @@ handle_xdg_surface_configure(void *data, struct xdg_surface *surface, uint32_t s
 
 	if (window->wait_for_configure) {
 		redraw(window, NULL, 0);
+		window->wait_for_configure = false;
 	}
 }
 
@@ -482,29 +542,18 @@ handle_xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 
 	if (width > 0 && height > 0) {
 		if (!window->fullscreen && !window->maximized) {
-			window->width = width;
-			window->height = height;
+			window->init_width = width;
+			window->init_height = height;
 		}
 		window->width = width;
 		window->height = height;
 	} else if (!window->fullscreen && !window->maximized) {
-		if (width == 0)
-			window->width = WINDOW_WIDTH_SIZE;
-		else
-			window->width = width;
-
-		if (height == 0)
-			window->height = WINDOW_HEIGHT_SIZE;
-		else
-			window->height = height;
+		window->width = window->init_width;
+		window->height = window->init_height;
 	}
 
-	/* if we've been resized set wait_for_configure to adjust the fb size 
-	 * in the frame callback handler, which will also clear this up */
-	if ((window->width > 0 && window->width != WINDOW_WIDTH_SIZE) &&
-	    (window->height > 0 && window->height != WINDOW_HEIGHT_SIZE)) {
-		window->wait_for_configure = true;
-	}
+	window->needs_update_buffer = true;
+
 }
 
 static void
@@ -522,6 +571,7 @@ static struct window *
 create_window(struct display *display, int width, int height, const char *app_id)
 {
 	struct window *window;
+	int i;
 
 	assert(display->wm_base != NULL);
 
@@ -529,6 +579,7 @@ create_window(struct display *display, int width, int height, const char *app_id
 	if (!window)
 		return NULL;
 
+	wl_list_init(&window->buffer_list);
 	window->callback = NULL;
 	window->display = display;
 	window->width = width;
@@ -554,6 +605,9 @@ create_window(struct display *display, int width, int height, const char *app_id
 		window->wait_for_configure = true;
 	}
 
+	for (i = 0; i < MAX_BUFFER_ALLOC; i++)
+		alloc_buffer(window, window->width, window->height);
+
 	return window;
 }
 
@@ -561,13 +615,14 @@ create_window(struct display *display, int width, int height, const char *app_id
 static void
 destroy_window(struct window *window)
 {
+	struct buffer *buffer, *buffer_next;
+
 	if (window->callback)
 		wl_callback_destroy(window->callback);
 
-	if (window->buffers[0].buffer)
-		wl_buffer_destroy(window->buffers[0].buffer);
-	if (window->buffers[1].buffer)
-		wl_buffer_destroy(window->buffers[1].buffer);
+	wl_list_for_each_safe(buffer, buffer_next,
+			      &window->buffer_list, buffer_link)
+		destroy_buffer(buffer);
 
 	if (window->xdg_toplevel)
 		xdg_toplevel_destroy(window->xdg_toplevel);
