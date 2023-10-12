@@ -97,6 +97,8 @@ struct receiver_data {
 };
 
 static int running = 1;
+static bool gst_pipeline_failed = FALSE;
+static bool fallback_gst_pipeline_tried = FALSE;
 
 static void
 redraw(void *data, struct wl_callback *callback, uint32_t time);
@@ -491,6 +493,19 @@ bus_sync_handler(GstBus *bus, GstMessage *message, gpointer user_data)
 
 		goto drop;
 	}
+	else if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
+		GError* err = NULL;
+		gchar* dbg_info = NULL;
+
+		gst_message_parse_error(message, &err, &dbg_info);
+		g_printerr("ERROR from element %s: %s code %d\n",
+			GST_OBJECT_NAME(message->src), err->message, err->code);
+		g_printerr("Debugging info: %s\n", (dbg_info) ? dbg_info : "none");
+		gst_pipeline_failed = TRUE;
+		g_error_free(err);
+		g_free(dbg_info);
+		goto drop;
+	}
 
 	return GST_BUS_PASS;
 
@@ -700,13 +715,13 @@ destroy_display(struct display *display)
 	free(display);
 }
 
-int main(int argc, char *argv[])
+// stringify the un-quoted string to quoted C string
+#define xstr(a) str(a)
+#define str(a) #a
+
+GstElement* create_pipeline(int* argc, char** argv[])
 {
-	int ret = 0;
-	struct sigaction sa;
-	struct receiver_data receiver_data = {};
-	struct display *display;
-	struct window *window;
+	GError *error = NULL;
 	const char *camera_device = NULL;
 	const char *width_str = NULL;
 	const char *height_str = NULL;
@@ -718,19 +733,6 @@ int main(int argc, char *argv[])
 	bool v4l2 = false;
 
 	char pipeline_str[1024];
-	GError *error = NULL;
-	const char *app_id = "camera-gstreamer";
-
-	sa.sa_sigaction = signal_int;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = SA_RESETHAND | SA_SIGINFO;
-	sigaction(SIGINT, &sa, NULL);
-
-	int gargc = 2;
-	char **gargv = static_cast<char **>(calloc(2, sizeof(char *)));
-
-	gargv[0] = strdup(argv[0]);
-	gargv[1] = strdup("--gst-debug-level=2");
 
 	camera_device = getenv("DEFAULT_V4L2_DEVICE");
 	if (!camera_device)
@@ -758,24 +760,57 @@ int main(int argc, char *argv[])
 	if (v4l2)
 		snprintf(pipeline_str, sizeof(pipeline_str), "v4l2src device=%s ! video/x-raw,width=%d,height=%d ! waylandsink",
 			camera_device, width, height);
-	else
-		snprintf(pipeline_str, sizeof(pipeline_str), "pipewiresrc ! video/x-raw,width=%d,height=%d ! waylandsink",
-      width, height);
-
-	gst_init(&gargc, &gargv);
-
-	setbuf(stdout, NULL);
+	else if (gst_pipeline_failed == TRUE) {
+		snprintf(pipeline_str, sizeof(pipeline_str), "filesrc location=%s/still-image.jpg ! decodebin ! videoconvert ! imagefreeze ! waylandsink fullscreen=true",
+			xstr(APP_DATA_PATH), width, height);
+		fallback_gst_pipeline_tried = TRUE;
+	}
+	else {
+		snprintf(pipeline_str, sizeof(pipeline_str), "pipewiresrc ! video/x-raw,width=%d,height=%d ! waylandsink", width,
+			height);
+	}
 
 	fprintf(stdout, "Using pipeline: %s\n", pipeline_str);
 
 	GstElement *pipeline = gst_parse_launch(pipeline_str, &error);
+
 	if (error || !pipeline) {
 		fprintf(stderr, "gstreamer pipeline construction failed!\n");
-		free(gargv);
-		return EXIT_FAILURE;
+		free(argv);
+		return NULL;
 	}
 
-	receiver_data.pipeline = pipeline;
+	return pipeline;
+}
+
+int main(int argc, char* argv[])
+{
+	int ret = 0;
+	struct sigaction sa;
+	struct receiver_data receiver_data = {};
+	struct display* display;
+	struct window* window;
+	const char* app_id = "camera-gstreamer";
+
+	sa.sa_sigaction = signal_int;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_RESETHAND | SA_SIGINFO;
+	sigaction(SIGINT, &sa, NULL);
+
+	int gargc = 2;
+	char** gargv = static_cast<char**>(calloc(2, sizeof(char*)));
+
+	gargv[0] = strdup(argv[0]);
+	gargv[1] = strdup("--gst-debug-level=2");
+
+	setbuf(stdout, NULL);
+
+	gst_init(&gargc, &gargv);
+
+	receiver_data.pipeline = create_pipeline(&gargc, &gargv);
+
+	if (!receiver_data.pipeline)
+		return EXIT_FAILURE;
 
 	display = create_display(argc, argv);
 	if (!display)
@@ -809,22 +844,34 @@ int main(int argc, char *argv[])
 		redraw(window, NULL, 0);
 	}
 
-	GstBus *bus = gst_element_get_bus(pipeline);
+	GstBus *bus = gst_element_get_bus(receiver_data.pipeline);
 	gst_bus_add_signal_watch(bus);
 
 	g_signal_connect(bus, "message::error", G_CALLBACK(error_cb), &receiver_data);
 	gst_bus_set_sync_handler(bus, bus_sync_handler, &receiver_data, NULL);
 	gst_object_unref(bus);
 
-	gst_element_set_state(pipeline, GST_STATE_PLAYING);
+	gst_element_set_state(receiver_data.pipeline, GST_STATE_PLAYING);
 	fprintf(stdout, "gstreamer pipeline running\n");
 
 	// run the application
-	while (running && ret != -1)
+	while (running && ret != -1) {
 		ret = wl_display_dispatch(display->wl_display);
-
-	gst_element_set_state(pipeline, GST_STATE_NULL);
-	gst_object_unref(pipeline);
+		if (gst_pipeline_failed && fallback_gst_pipeline_tried == FALSE) {
+			gst_element_set_state(receiver_data.pipeline, GST_STATE_NULL);
+			gst_object_unref(receiver_data.pipeline);
+			/* retry with fallback pipeline */
+			receiver_data.pipeline = create_pipeline(&gargc, &gargv);
+			GstBus *bus = gst_element_get_bus(receiver_data.pipeline);
+			gst_bus_add_signal_watch(bus);
+			g_signal_connect(bus, "message::error", G_CALLBACK(error_cb), &receiver_data);
+			gst_bus_set_sync_handler(bus, bus_sync_handler, &receiver_data, NULL);
+			gst_object_unref(bus);
+			gst_element_set_state(receiver_data.pipeline, GST_STATE_PLAYING);
+		}
+	}
+	gst_element_set_state(receiver_data.pipeline, GST_STATE_NULL);
+	gst_object_unref(receiver_data.pipeline);
 
 	destroy_window(window);
 	destroy_display(display);

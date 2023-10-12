@@ -117,3 +117,5 @@ target_link_libraries(${PROJECT_NAME}
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 include(GNUInstallDirs)
 install(FILES ${PROJECT_NAME}.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES still-image.jpg DESTINATION ${CMAKE_INSTALL_DATADIR}/applications/data)
+add_definitions(-DAPP_DATA_PATH=${CMAKE_INSTALL_FULL_DATADIR}/applications/data)
