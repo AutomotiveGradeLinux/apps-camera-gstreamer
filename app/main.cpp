@@ -23,6 +23,11 @@
 #include <gst/video/videooverlay.h>
 #include <gst/wayland/wayland.h>
 
+#if !GST_CHECK_VERSION(1, 22, 0)
+#define gst_is_wl_display_handle_need_context_message gst_is_wayland_display_handle_need_context_message
+#define gst_wl_display_handle_context_new gst_wayland_display_handle_context_new
+#endif
+
 // these only applies if the window is a dialog/pop-up one
 // by default the compositor make the window maximized
 #define WINDOW_WIDTH_SIZE	640
@@ -92,7 +97,6 @@ struct receiver_data {
 	struct window *window;
 
 	GstElement *pipeline;
-	GstWaylandVideo *wl_video;
 	GstVideoOverlay *overlay;
 };
 
@@ -462,12 +466,11 @@ bus_sync_handler(GstBus *bus, GstMessage *message, gpointer user_data)
 	struct receiver_data *d =
 		static_cast<struct receiver_data *>(user_data);
 
-	if (gst_is_wayland_display_handle_need_context_message(message)) {
+	if (gst_is_wl_display_handle_need_context_message(message)) {
 		GstContext *context;
 		struct wl_display *display_handle = d->window->display->wl_display;
 
-		context = gst_wayland_display_handle_context_new(display_handle);
-		d->wl_video = GST_WAYLAND_VIDEO(GST_MESSAGE_SRC(message));
+		context = gst_wl_display_handle_context_new(display_handle);
 		gst_element_set_context(GST_ELEMENT(GST_MESSAGE_SRC(message)), context);
 
 		goto drop;
