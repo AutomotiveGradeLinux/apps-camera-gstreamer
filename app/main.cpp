@@ -726,7 +726,7 @@ GstElement* create_pipeline(int* argc, char** argv[])
 			camera_device, width, height);
 	else if (gst_pipeline_failed == TRUE) {
 		snprintf(pipeline_str, sizeof(pipeline_str), "filesrc location=%s/still-image.jpg ! decodebin ! videoconvert ! imagefreeze ! waylandsink fullscreen=true",
-			xstr(APP_DATA_PATH), width, height);
+			xstr(APP_DATA_PATH));
 		fallback_gst_pipeline_tried = TRUE;
 	}
 	else {
