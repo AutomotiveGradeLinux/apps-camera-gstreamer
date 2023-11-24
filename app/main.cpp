@@ -14,9 +14,8 @@
 #include <fcntl.h>
 #include <assert.h>
 
-#include "xdg-shell-client-protocol.h"
-#include "agl-shell-desktop-client-protocol.h"
 #include "utils.h"
+#include "xdg-shell-client-protocol.h"
 
 #include <gst/gst.h>
 
@@ -26,6 +25,10 @@
 #if !GST_CHECK_VERSION(1, 22, 0)
 #define gst_is_wl_display_handle_need_context_message gst_is_wayland_display_handle_need_context_message
 #define gst_wl_display_handle_context_new gst_wayland_display_handle_context_new
+#endif
+
+#ifndef APP_DATA_PATH
+#define APP_DATA_PATH /usr/share/applications/data
 #endif
 
 // these only applies if the window is a dialog/pop-up one
@@ -57,8 +60,6 @@ struct display {
 	} output_data;
 
 	struct xdg_wm_base *wm_base;
-	struct agl_shell_desktop *agl_shell_desktop;
-
 	int has_xrgb;
 };
 
@@ -366,32 +367,6 @@ static const struct wl_output_listener output_listener = {
 	display_handle_scale
 };
 
-static void
-application_id(void *data, struct agl_shell_desktop *agl_shell_desktop,
-		const char *app_id)
-{
-	(void) data;
-	(void) agl_shell_desktop;
-	(void) app_id;
-}
-
-static void
-application_id_state(void *data, struct agl_shell_desktop *agl_shell_desktop,
-		     const char *app_id, const char *app_data,
-		     uint32_t app_state, uint32_t app_role)
-{
-        (void) data;
-        (void) app_data;
-        (void) agl_shell_desktop;
-        (void) app_id;
-        (void) app_state;
-        (void) app_role;
-}
-
-static const struct agl_shell_desktop_listener agl_shell_desktop_listener = {
-        application_id,
-        application_id_state,
-};
 
 static void
 registry_handle_global(void *data, struct wl_registry *registry, uint32_t id,
@@ -411,12 +386,6 @@ registry_handle_global(void *data, struct wl_registry *registry, uint32_t id,
 		d->shm = static_cast<struct wl_shm *>(wl_registry_bind(registry,
 				id, &wl_shm_interface, 1));
 		wl_shm_add_listener(d->shm, &shm_listener, d);
-	} else if (strcmp(interface, "agl_shell_desktop") == 0) {
-		d->agl_shell_desktop = static_cast<struct agl_shell_desktop *>(wl_registry_bind(registry, id,
-						        &agl_shell_desktop_interface, 1));
-		/* as an example, show how to register for events from the compositor */
-		agl_shell_desktop_add_listener(d->agl_shell_desktop,
-					       &agl_shell_desktop_listener, d);
 	} else if (strcmp(interface, "wl_output") == 0) {
 		d->wl_output = static_cast<struct wl_output *>(wl_registry_bind(registry, id,
 					     &wl_output_interface, 1));
@@ -682,11 +651,6 @@ create_display(int argc, char *argv[])
 		return NULL;
 	}
 
-	if (display->agl_shell_desktop == NULL) {
-		fprintf(stderr, "No agl_shell extension present\n");
-		return NULL;
-	}
-
 	wl_display_roundtrip(display->wl_display);
 
 	if (!display->has_xrgb) {
@@ -705,9 +669,6 @@ destroy_display(struct display *display)
 
 	if (display->wm_base)
 		xdg_wm_base_destroy(display->wm_base);
-
-	if (display->agl_shell_desktop)
-		agl_shell_desktop_destroy(display->agl_shell_desktop);
 
 	if (display->wl_compositor)
 		wl_compositor_destroy(display->wl_compositor);
@@ -818,13 +779,6 @@ int main(int argc, char* argv[])
 	display = create_display(argc, argv);
 	if (!display)
 		return -1;
-
-	// if you'd want to place the video in a pop-up/dialog type of window:
-	// agl_shell_desktop_set_app_property(display->agl_shell_desktop, app_id,
-	//				   AGL_SHELL_DESKTOP_APP_ROLE_POPUP,
-	//				   WINDOW_WIDTH_POS_X, WINDOW_WIDTH_POS_Y,
-	//				   0, 0, WINDOW_WIDTH_SIZE, WINDOW_HEIGHT_SIZE,
-	//				   display->wl_output);
 
 	// we use the role to set a correspondence between the top level
 	// surface and our application, with the previous call letting the
