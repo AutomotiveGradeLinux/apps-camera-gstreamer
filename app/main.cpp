@@ -16,6 +16,7 @@
 
 #include "utils.h"
 #include "xdg-shell-client-protocol.h"
+#include "AglShellGrpcClient.h"
 
 #include <gst/gst.h>
 
@@ -216,6 +217,7 @@ create_shm_buffer(struct display *display, struct buffer *buffer,
 	buffer->height = height;
 
 	fprintf(stdout, "Created shm buffer with width %d, height %d\n", width, height);
+
 	return 0;
 }
 
@@ -571,6 +573,8 @@ create_window(struct display *display, int width, int height, const char *app_id
 	window->display = display;
 	window->width = width;
 	window->height = height;
+	window->init_width = width;
+	window->init_height = height;
 	window->surface = wl_compositor_create_surface(display->wl_compositor);
 
 	if (display->wm_base) {
@@ -755,6 +759,13 @@ int main(int argc, char* argv[])
 	struct display* display;
 	struct window* window;
 	const char* app_id = "camera-gstreamer";
+
+	// for starting the application from the beginning, with a diffrent
+	// role we need to handle that creating the main window
+	if (argc >= 2 && strcmp(argv[1], "float") == 0) {
+		GrpcClient *client = new GrpcClient();
+		client->SetAppFloat(std::string(app_id), 30, 400);
+	}
 
 	sa.sa_sigaction = signal_int;
 	sigemptyset(&sa.sa_mask);
