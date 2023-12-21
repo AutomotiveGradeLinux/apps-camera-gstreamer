@@ -734,8 +734,7 @@ GstElement* create_pipeline(int* argc, char** argv[])
 		fallback_gst_pipeline_tried = TRUE;
 	}
 	else {
-		snprintf(pipeline_str, sizeof(pipeline_str), "pipewiresrc ! video/x-raw,width=%d,height=%d ! waylandsink", width,
-			height);
+		snprintf(pipeline_str, sizeof(pipeline_str), "pipewiresrc ! waylandsink");
 	}
 
 	fprintf(stdout, "Using pipeline: %s\n", pipeline_str);
