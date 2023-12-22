@@ -729,7 +729,7 @@ GstElement* create_pipeline(int* argc, char** argv[])
 		snprintf(pipeline_str, sizeof(pipeline_str), "v4l2src device=%s ! video/x-raw,width=%d,height=%d ! waylandsink",
 			camera_device, width, height);
 	else if (gst_pipeline_failed == TRUE) {
-		snprintf(pipeline_str, sizeof(pipeline_str), "filesrc location=%s/still-image.jpg ! decodebin ! videoconvert ! imagefreeze ! waylandsink fullscreen=true",
+		snprintf(pipeline_str, sizeof(pipeline_str), "filesrc location=%s/still-image.jpg ! decodebin ! videoconvert ! imagefreeze ! waylandsink",
 			xstr(APP_DATA_PATH));
 		fallback_gst_pipeline_tried = TRUE;
 	}
