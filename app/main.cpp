@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <assert.h>
+#include <thread>
 
 #include "utils.h"
 #include "xdg-shell-client-protocol.h"
@@ -41,6 +42,8 @@
 #define WINDOW_WIDTH_POS_Y	180
 
 #define MAX_BUFFER_ALLOC	2
+
+const char* my_app_id = "camera-gstreamer";
 
 // C++ requires a cast and we in wayland we do the cast implictly
 #define WL_ARRAY_FOR_EACH(pos, array, type) \
@@ -750,6 +753,30 @@ GstElement* create_pipeline(int* argc, char** argv[])
 	return pipeline;
 }
 
+static void
+run_in_thread(GrpcClient *client)
+{
+        grpc::Status status = client->Wait();
+}
+
+static void
+app_status_callback(::agl_shell_ipc::AppStateResponse app_response, void *data)
+{
+	(void) data;
+
+	std::cout << " >> AppStateResponse app_id " <<
+		app_response.app_id() << ", with state " <<
+		app_response.state() << std::endl;
+
+	// there's no implicit deactivation for an activation of another app so
+	// assume that another application got activate we are also deactived
+	if (app_response.state() == 2 && app_response.app_id() != my_app_id) {
+		// suspend pipeline
+		std::cout << "Suspending gstreamer pipeline" << std::endl;
+	}
+}
+
+
 int main(int argc, char* argv[])
 {
 	int ret = 0;
@@ -757,13 +784,19 @@ int main(int argc, char* argv[])
 	struct receiver_data receiver_data = {};
 	struct display* display;
 	struct window* window;
-	const char* app_id = "camera-gstreamer";
+
+	// always start the grpc client
+	GrpcClient *client = new GrpcClient();
+
+	// subscribe to events to be able to suspend/pause the video
+	// feed
+	std::thread th = std::thread(run_in_thread, client);
+	client->AppStatusState(app_status_callback, &receiver_data);
 
 	// for starting the application from the beginning, with a diffrent
 	// role we need to handle that creating the main window
 	if (argc >= 2 && strcmp(argv[1], "float") == 0) {
-		GrpcClient *client = new GrpcClient();
-		client->SetAppFloat(std::string(app_id), 30, 400);
+		client->SetAppFloat(std::string(my_app_id), 30, 400);
 	}
 
 	sa.sa_sigaction = signal_int;
@@ -793,7 +826,7 @@ int main(int argc, char* argv[])
 	// we use the role to set a correspondence between the top level
 	// surface and our application, with the previous call letting the
 	// compositor know that we're one and the same
-	window = create_window(display, WINDOW_WIDTH_SIZE, WINDOW_HEIGHT_SIZE, app_id);
+	window = create_window(display, WINDOW_WIDTH_SIZE, WINDOW_HEIGHT_SIZE, my_app_id);
 
 	if (!window) {
 		free(gargv);
